@@ -1,4 +1,4 @@
-# Poderes con las manos
+# Palm Blast
 
 Efecto de "poderes" en tiempo real con la webcam: abrís la palma y aparece una bola de energía que sigue tu mano. Cerrás el puño y explota.
 
