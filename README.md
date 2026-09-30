@@ -1,5 +1,7 @@
 # Palm Blast
 
+**▶ Probalo en vivo:** https://candedefranco.github.io/palm-blast/ (Chrome, con webcam)
+
 Efecto de "poderes" en tiempo real con la webcam: abrís la palma y aparece una bola de energía que sigue tu mano. Cerrás el puño y explota.
 
 Es una sola página web. Usa [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) para detectar la mano y dibuja las partículas en un canvas. No hay que instalar nada.
