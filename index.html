@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Poderes con las Manos</title>
+<style>
+  :root {
+    --bg: #000;
+    --fg: #fff;
+    --muted: rgba(255,255,255,.65);
+    --pill: rgba(18,18,22,.62);
+    --pill-border: rgba(255,255,255,.14);
+    --rec: #ff3b4e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  canvas { display: block; background: #000; }
+
+  .pill { background: var(--pill); border: 1px solid var(--pill-border); border-radius: 999px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  #ui { position: fixed; left: 16px; right: 16px; bottom: 16px; display: flex; gap: 8px;
+    flex-wrap: wrap; justify-content: center; align-items: center; transition: opacity .25s; }
+  #ui.hidden, #hint.hidden { opacity: 0; pointer-events: none; }
+  button { font: inherit; font-size: 14px; color: var(--fg); cursor: pointer; padding: 10px 16px; }
+  button:hover { border-color: rgba(255,255,255,.35); }
+  button:disabled { opacity: .4; cursor: default; }
+  #rec .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--rec); margin-right: 8px; vertical-align: -1px; }
+  #rec.on { background: var(--rec); border-color: var(--rec); }
+  #rec.on .dot { background: #fff; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  #themes { display: flex; gap: 6px; padding: 6px 8px; }
+  #themes button { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+  #themes button.sel { border-color: #fff; }
+
+  #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 10px 18px;
+    font-size: 14px; color: var(--muted); white-space: nowrap; transition: opacity .4s; }
+  #count { position: fixed; inset: 0; display: grid; place-items: center; font-size: 160px;
+    font-weight: 800; pointer-events: none; text-shadow: 0 0 40px rgba(255,255,255,.5); }
+
+  #start { position: fixed; inset: 0; display: grid; place-items: center; background: #000; z-index: 5; padding: 16px; }
+  #start .box { max-width: 420px; text-align: center; }
+  #start h1 { font-size: 28px; margin: 0 0 8px; }
+  #start p { color: var(--muted); line-height: 1.5; margin: 0 0 20px; }
+  #start button { background: #fff; color: #000; border-radius: 999px; padding: 14px 26px; font-weight: 600; border: 0; }
+  #start .err { color: #ff8a8a; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas></div>
+
+<div id="hint" class="pill">Abrí la palma para cargar energía · Cerrá el puño para explotar</div>
+<div id="count"></div>
+
+<div id="ui">
+  <button id="rec" class="pill" title="R"><span class="dot"></span><span id="recLabel">Grabar</span></button>
+  <button id="fmt" class="pill" title="V">Vertical 9:16</button>
+  <div id="themes" class="pill"></div>
+  <button id="hide" class="pill" title="H">Ocultar (H)</button>
+</div>
+
+<div id="start">
+  <div class="box">
+    <h1>Poderes con las manos</h1>
+    <p>Abrí la palma y aparece una bola de energía que sigue tu mano. Cerrá el puño y explota.<br>
+       Teclas: <b>R</b> grabar · <b>V</b> formato · <b>1–4</b> color · <b>H</b> ocultar · <b>D</b> ver esqueleto</p>
+    <button id="go">Activar cámara</button>
+    <div id="msg" class="err"></div>
+  </div>
+</div>
+
+<video id="v" playsinline muted style="display:none"></video>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const video = document.getElementById("v");
+const $ = (id) => document.getElementById(id);
+
+// ---------- Temas de color ----------
+const THEMES = [
+  { name: "Azul",    glow: [70, 170, 255],  spark: [150, 225, 255] },
+  { name: "Fuego",   glow: [255, 100, 20],  spark: [255, 205, 90] },
+  { name: "Verde",   glow: [50, 255, 120],  spark: [190, 255, 140] },
+  { name: "Violeta", glow: [175, 70, 255],  spark: [255, 130, 240] },
+];
+let theme = THEMES[0];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+function makeSprite(c) {
+  const s = document.createElement("canvas");
+  s.width = s.height = 64;
+  const g = s.getContext("2d");
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, "rgba(255,255,255,1)");
+  grd.addColorStop(0.2, rgba(c, 0.95));
+  grd.addColorStop(0.5, rgba(c, 0.35));
+  grd.addColorStop(1, rgba(c, 0));
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 64, 64);
+  return s;
+}
+let spriteGlow, spriteSpark;
+const spriteWhite = makeSprite([255, 255, 255]);
+function setTheme(i) {
+  theme = THEMES[i];
+  spriteGlow = makeSprite(theme.glow);
+  spriteSpark = makeSprite(theme.spark);
+  document.querySelectorAll("#themes button").forEach((b, j) => b.classList.toggle("sel", j === i));
+}
+THEMES.forEach((t, i) => {
+  const b = document.createElement("button");
+  b.title = `${t.name} (${i + 1})`;
+  b.style.background = rgba(t.glow, 1);
+  b.onclick = () => setTheme(i);
+  $("themes").appendChild(b);
+});
+setTheme(0);
+
+// ---------- Tamaño del lienzo ----------
+let vertical = false;
+let U = 1; // unidad de escala relativa a 720px
+function resize() {
+  const W = innerWidth, H = innerHeight;
+  let cw = W, ch = H;
+  if (vertical) { ch = H; cw = H * 9 / 16; if (cw > W) { cw = W; ch = W * 16 / 9; } }
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  let pw = Math.round(cw * dpr), ph = Math.round(ch * dpr);
+  const cap = 1920 / Math.max(pw, ph);
+  if (cap < 1) { pw = Math.round(pw * cap); ph = Math.round(ph * cap); }
+  canvas.width = pw; canvas.height = ph;
+  canvas.style.width = cw + "px"; canvas.style.height = ch + "px";
+  U = Math.min(pw, ph) / 720;
+}
+addEventListener("resize", () => { if (!recording) resize(); });
+resize();
+
+// Encaje "cover" del video en el lienzo (espejado, estilo selfie)
+function coverRect() {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const s = Math.max(canvas.width / vw, canvas.height / vh);
+  const dw = vw * s, dh = vh * s;
+  return { ox: (canvas.width - dw) / 2, oy: (canvas.height - dh) / 2, dw, dh };
+}
+function toCanvas(lm, r) {
+  return { x: canvas.width - (r.ox + lm.x * r.dw), y: r.oy + lm.y * r.dh };
+}
+
+// ---------- Detección de gestos ----------
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const FINGERS = [[8, 6], [12, 10], [16, 14], [20, 18]]; // [punta, articulación media]
+function analyzeHand(pts) {
+  const w = pts[0];
+  let ext = 0, curl = 0;
+  for (const [tip, pip] of FINGERS) {
+    const dt = dist(pts[tip], w), dp = dist(pts[pip], w);
+    if (dt > dp * 1.2) ext++;
+    else if (dt < dp) curl++;
+  }
+  const idx = [0, 5, 9, 13, 17];
+  let cx = 0, cy = 0;
+  for (const i of idx) { cx += pts[i].x; cy += pts[i].y; }
+  cx /= idx.length; cy /= idx.length;
+  // La bola flota un poco hacia los dedos
+  cx += (pts[9].x - pts[0].x) * 0.15;
+  cy += (pts[9].y - pts[0].y) * 0.15;
+  return { pts, open: ext >= 4, fist: curl >= 3, size: dist(pts[0], pts[9]), cx, cy };
+}
+
+// ---------- Poder (uno por mano) ----------
+class Power {
+  constructor() {
+    this.charge = 0; this.x = 0; this.y = 0; this.size = 100;
+    this.has = false; this.lostT = 0; this.openF = 0; this.fistF = 0;
+    this.orbit = Array.from({ length: 70 }, () => ({
+      a: Math.random() * Math.PI * 2,
+      sp: (0.8 + Math.random() * 2.2) * (Math.random() < 0.5 ? -1 : 1),
+      rf: 0.55 + Math.random() * 0.8,
+      tilt: Math.random() * Math.PI,
+      sz: 4 + Math.random() * 9,
+    }));
+  }
+  get radius() {
+    const e = 1 - Math.pow(1 - this.charge, 3);
+    return Math.max(this.size * 0.55, 28 * U) * e;
+  }
+}
+const powers = { Left: new Power(), Right: new Power() };
+
+// ---------- Partículas y efectos ----------
+const parts = [];
+const rings = [];
+let flash = 0, shake = 0, exploded = false;
+
+function spawn(p) { if (parts.length < 2500) parts.push(p); }
+
+function explode(p) {
+  const s = p.charge, R = p.radius, x = p.x, y = p.y;
+  const n = Math.round(90 + 240 * s);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = (300 + Math.random() * 1200) * U * (0.6 + 0.4 * s);
+    spawn({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0, max: 0.45 + Math.random() * 0.9,
+      size: (8 + Math.random() * 22) * U, drag: 3.2, g: 0,
+      spr: Math.random() < 0.3 ? spriteWhite : Math.random() < 0.5 ? spriteSpark : spriteGlow });
+  }
+  for (let i = 0; i < 50; i++) { // brasas que caen
+    const a = Math.random() * Math.PI * 2;
+    const sp = (120 + Math.random() * 420) * U;
+    spawn({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 150 * U, life: 0, max: 1.2 + Math.random() * 1.4,
+      size: (4 + Math.random() * 6) * U, drag: 1.4, g: 380 * U, spr: spriteSpark });
+  }
+  const far = Math.max(canvas.width, canvas.height) * 0.65;
+  rings.push({ x, y, r0: R, r1: R + far, life: 0, max: 0.55, w: 34 * U });
+  rings.push({ x, y, r0: R * 0.5, r1: R + far * 0.45, life: -0.06, max: 0.7, w: 18 * U });
+  flash = Math.min(0.85, 0.25 + 0.6 * s);
+  shake = (8 + 26 * s) * U;
+  if (!exploded) { exploded = true; $("hint").classList.add("hidden"); }
+}
+
+function updatePower(p, hand, dt, t) {
+  if (hand) {
+    p.lostT = 0;
+    p.openF = hand.open ? p.openF + 1 : 0;
+    p.fistF = hand.fist ? p.fistF + 1 : 0;
+    if (!p.has) { p.x = hand.cx; p.y = hand.cy; p.size = hand.size; p.has = true; }
+    const k = 1 - Math.exp(-dt * 22);
+    p.x += (hand.cx - p.x) * k; p.y += (hand.cy - p.y) * k;
+    p.size += (hand.size - p.size) * k;
+
+    if (p.fistF >= 2 && p.charge > 0.35) { explode(p); p.charge = 0; }
+    else if (p.openF >= 3) p.charge = Math.min(1, p.charge + dt / 0.7);
+    else if (p.fistF > 0) p.charge = Math.max(0, p.charge - dt * 3);
+    else p.charge = Math.max(0, p.charge - dt * 0.4);
+  } else {
+    p.lostT += dt;
+    if (p.lostT > 0.25) p.charge = Math.max(0, p.charge - dt * 2.5);
+    if (p.charge === 0) p.has = false;
+  }
+  if (p.charge <= 0) return;
+
+  const R = p.radius;
+  for (const o of p.orbit) o.a += o.sp * dt * 2;
+
+  // Chispas que salen de la superficie
+  const rate = 70 * p.charge * dt;
+  for (let i = 0; i < rate || Math.random() < rate - i; i++) {
+    const a = Math.random() * Math.PI * 2, sp = (40 + Math.random() * 140) * U;
+    spawn({ x: p.x + Math.cos(a) * R * 0.8, y: p.y + Math.sin(a) * R * 0.8,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40 * U, life: 0, max: 0.35 + Math.random() * 0.5,
+      size: (4 + Math.random() * 7) * U, drag: 2, g: 0, spr: spriteSpark });
+  }
+  // Mientras carga, la energía es absorbida hacia el centro
+  if (p.charge < 1) {
+    for (let i = 0; i < 3; i++) {
+      const a = Math.random() * Math.PI * 2, d = R * (2.5 + Math.random() * 2) + 40 * U;
+      const life = 0.25 + Math.random() * 0.2;
+      spawn({ x: p.x + Math.cos(a) * d, y: p.y + Math.sin(a) * d,
+        vx: -Math.cos(a) * d / life, vy: -Math.sin(a) * d / life, life: 0, max: life,
+        size: (5 + Math.random() * 6) * U, drag: 0, g: 0, spr: spriteSpark });
+    }
+  }
+}
+
+function updateFx(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const q = parts[i];
+    q.life += dt;
+    if (q.life >= q.max) { parts[i] = parts[parts.length - 1]; parts.pop(); continue; }
+    const d = Math.exp(-q.drag * dt);
+    q.vx *= d; q.vy = q.vy * d + q.g * dt;
+    q.x += q.vx * dt; q.y += q.vy * dt;
+  }
+  for (let i = rings.length - 1; i >= 0; i--) {
+    rings[i].life += dt;
+    if (rings[i].life >= rings[i].max) rings.splice(i, 1);
+  }
+  flash *= Math.exp(-dt * 7);
+  shake *= Math.exp(-dt * 9);
+}
+
+// ---------- Dibujo ----------
+function drawBolt(x, y, R) {
+  const a = Math.random() * Math.PI * 2, L = R * (1.2 + Math.random() * 0.7);
+  const pts = [[x, y]];
+  for (let i = 1; i <= 7; i++) {
+    const f = i / 7, j = (Math.random() - 0.5) * R * 0.35 * (1 - f * 0.3);
+    pts.push([x + Math.cos(a) * L * f - Math.sin(a) * j, y + Math.sin(a) * L * f + Math.cos(a) * j]);
+  }
+  for (const [w, c] of [[6 * U, rgba(theme.glow, 0.35)], [2.2 * U, rgba(theme.spark, 0.9)], [1 * U, "rgba(255,255,255,.95)"]]) {
+    ctx.lineWidth = w; ctx.strokeStyle = c; ctx.beginPath();
+    pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+    ctx.stroke();
+  }
+}
+
+function drawPower(p, t) {
+  if (p.charge <= 0) return;
+  const R = p.radius * (1 + 0.06 * Math.sin(t * 9) + 0.03 * Math.sin(t * 23));
+  const { x, y } = p;
+
+  // Luz proyectada sobre la escena
+  let g = ctx.createRadialGradient(x, y, 0, x, y, R * 6);
+  g.addColorStop(0, rgba(theme.glow, 0.28 * p.charge));
+  g.addColorStop(1, rgba(theme.glow, 0));
+  ctx.fillStyle = g; ctx.fillRect(x - R * 6, y - R * 6, R * 12, R * 12);
+
+  // Halo
+  g = ctx.createRadialGradient(x, y, R * 0.3, x, y, R * 2.2);
+  g.addColorStop(0, rgba(theme.glow, 0.7));
+  g.addColorStop(1, rgba(theme.glow, 0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, R * 2.2, 0, Math.PI * 2); ctx.fill();
+
+  // Partículas orbitando
+  const rot = t * 0.4;
+  for (const o of p.orbit) {
+    const lx = Math.cos(o.a) * R * o.rf, ly = Math.sin(o.a) * R * o.rf * 0.35;
+    const ang = o.tilt + rot, c = Math.cos(ang), s = Math.sin(ang);
+    const px = x + lx * c - ly * s, py = y + lx * s + ly * c;
+    const sz = o.sz * U * (0.5 + p.charge * 0.8);
+    ctx.drawImage(spriteSpark, px - sz, py - sz, sz * 2, sz * 2);
+  }
+
+  // Núcleo
+  g = ctx.createRadialGradient(x, y, 0, x, y, R);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.35, rgba(theme.spark, 0.95));
+  g.addColorStop(0.75, rgba(theme.glow, 0.5));
+  g.addColorStop(1, rgba(theme.glow, 0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.fill();
+
+  // Rayos
+  const bolts = Math.random() < 0.35 * p.charge ? 1 + (Math.random() < 0.4) : 0;
+  for (let i = 0; i < bolts; i++) drawBolt(x, y, R);
+}
+
+function drawFx() {
+  for (const q of parts) {
+    const k = 1 - q.life / q.max;
+    const sz = q.size * (0.4 + 0.6 * k);
+    ctx.globalAlpha = Math.min(1, k * 1.5);
+    ctx.drawImage(q.spr, q.x - sz, q.y - sz, sz * 2, sz * 2);
+  }
+  ctx.globalAlpha = 1;
+  for (const r of rings) {
+    if (r.life < 0) continue;
+    const q = r.life / r.max, e = 1 - Math.pow(1 - q, 3);
+    const rad = r.r0 + (r.r1 - r.r0) * e;
+    ctx.lineWidth = r.w * (1 - q) + 1;
+    ctx.strokeStyle = rgba(theme.glow, 0.8 * (1 - q));
+    ctx.beginPath(); ctx.arc(r.x, r.y, rad, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = Math.max(1, r.w * 0.25 * (1 - q));
+    ctx.strokeStyle = `rgba(255,255,255,${0.9 * (1 - q)})`;
+    ctx.stroke();
+  }
+}
+
+let debug = false;
+function drawSkeleton(hands) {
+  ctx.fillStyle = "#0f0";
+  for (const h of hands) for (const pt of h.pts) { ctx.beginPath(); ctx.arc(pt.x, pt.y, 4 * U, 0, 7); ctx.fill(); }
+  ctx.font = `${18 * U}px system-ui`;
+  for (const h of hands) ctx.fillText(h.open ? "ABIERTA" : h.fist ? "PUÑO" : "-", h.pts[0].x, h.pts[0].y + 30 * U);
+}
+
+function render(t, hands) {
+  const W = canvas.width, H = canvas.height;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  if (shake > 0.5) ctx.translate((Math.random() - 0.5) * shake * 2, (Math.random() - 0.5) * shake * 2);
+
+  // Video espejado
+  const r = coverRect();
+  ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1);
+  ctx.drawImage(video, r.ox, r.oy, r.dw, r.dh);
+  ctx.restore();
+  // Oscurecer un poco para que brille más la energía
+  ctx.fillStyle = "rgba(0,0,0,0.28)"; ctx.fillRect(-50, -50, W + 100, H + 100);
+
+  ctx.globalCompositeOperation = "lighter";
+  for (const p of Object.values(powers)) drawPower(p, t);
+  drawFx();
+  ctx.globalCompositeOperation = "source-over";
+  if (debug) drawSkeleton(hands);
+  ctx.restore();
+
+  if (flash > 0.01) {
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = rgba(theme.spark, flash * 0.6); ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "source-over";
+  }
+  // Viñeta
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
+  v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(1, "rgba(0,0,0,0.55)");
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+}
+
+// ---------- Bucle principal ----------
+let landmarker, lastVideoTime = -1, result = null, last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const t = now / 1000;
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    result = landmarker.detectForVideo(video, now);
+  }
+  const r = coverRect();
+  const hands = [];
+  const byLabel = {};
+  if (result && result.landmarks) {
+    result.landmarks.forEach((lms, i) => {
+      const label = result.handedness?.[i]?.[0]?.categoryName || (i ? "Right" : "Left");
+      const h = analyzeHand(lms.map((l) => toCanvas(l, r)));
+      hands.push(h);
+      if (!byLabel[label]) byLabel[label] = h;
+    });
+  }
+  for (const [label, p] of Object.entries(powers)) updatePower(p, byLabel[label], dt, t);
+  updateFx(dt);
+  render(t, hands);
+  requestAnimationFrame(loop);
+}
+
+// ---------- Grabación ----------
+let recording = false, rec = null, chunks = [], recStart = 0, recTimer = null, counting = false;
+function pickMime() {
+  const types = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
+  return types.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+}
+async function toggleRec() {
+  if (counting) return;
+  if (recording) { rec.stop(); return; }
+  counting = true;
+  for (const n of [3, 2, 1]) { $("count").textContent = n; await new Promise((r) => setTimeout(r, 800)); }
+  $("count").textContent = ""; counting = false;
+
+  const mime = pickMime();
+  rec = new MediaRecorder(canvas.captureStream(30), mime ? { mimeType: mime, videoBitsPerSecond: 12_000_000 } : {});
+  chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    recording = false; clearInterval(recTimer);
+    $("rec").classList.remove("on"); $("recLabel").textContent = "Grabar"; $("fmt").disabled = false;
+    const type = rec.mimeType || "video/webm";
+    const blob = new Blob(chunks, { type });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `poder-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${type.includes("mp4") ? "mp4" : "webm"}`;
+    a.click();
+  };
+  rec.start(250);
+  recording = true; recStart = performance.now();
+  $("rec").classList.add("on"); $("fmt").disabled = true;
+  const tick = () => {
+    const s = Math.floor((performance.now() - recStart) / 1000);
+    $("recLabel").textContent = `Detener ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  tick(); recTimer = setInterval(tick, 500);
+}
+
+// ---------- Controles ----------
+$("rec").onclick = toggleRec;
+$("fmt").onclick = () => {
+  if (recording) return;
+  vertical = !vertical; resize();
+  $("fmt").textContent = vertical ? "Horizontal" : "Vertical 9:16";
+};
+const toggleUI = () => { $("ui").classList.toggle("hidden"); $("hint").classList.add("hidden"); };
+$("hide").onclick = toggleUI;
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "r") toggleRec();
+  else if (k === "v") $("fmt").click();
+  else if (k === "h") toggleUI();
+  else if (k === "d") debug = !debug;
+  else if (k >= "1" && k <= "4") setTheme(+k - 1);
+});
+
+// ---------- Arranque ----------
+$("go").onclick = async () => {
+  $("go").disabled = true; $("msg").textContent = "";
+  try {
+    $("go").textContent = "Pidiendo cámara…";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }, audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    $("go").textContent = "Cargando detector de manos…";
+    const files = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const opts = (delegate) => ({
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate,
+      },
+      runningMode: "VIDEO", numHands: 2,
+      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+    });
+    try { landmarker = await HandLandmarker.createFromOptions(files, opts("GPU")); }
+    catch { landmarker = await HandLandmarker.createFromOptions(files, opts("CPU")); }
+
+    $("start").remove();
+    resize();
+    requestAnimationFrame(loop);
+  } catch (err) {
+    console.error(err);
+    $("go").disabled = false; $("go").textContent = "Reintentar";
+    $("msg").textContent = err.name === "NotAllowedError"
+      ? "No hay permiso para usar la cámara. Habilitalo en el navegador y reintentá."
+      : "No se pudo iniciar: " + (err.message || err);
+  }
+};
+</script>
+</body>
+</html>
