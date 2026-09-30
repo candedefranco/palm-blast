@@ -44,6 +44,12 @@ Para probar los efectos sin cámara, abrí <http://localhost:8000/?sim>: una man
 | `H` | Ocultar controles |
 | `D` | Mostrar el esqueleto de la mano (para depurar) |
 
+## En el celular
+
+Funciona desde el navegador del celu con la cámara frontal (Chrome en Android, Safari en iPhone). Todo se maneja con los botones de abajo:
+- Si ocultás los botones, tocá la pantalla para volver a verlos.
+- Al terminar de grabar aparece **Guardar video**, que abre el menú para compartir (guardar en Fotos, mandarlo a Instagram, etc.).
+
 ## Tips para el reel
 
 - Grabá en vertical (`V`) y con poca luz en el cuarto: la energía brilla mucho más.

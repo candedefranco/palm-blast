@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Palm Blast</title>
 <style>
   :root {
@@ -21,7 +21,7 @@
 
   .pill { background: var(--pill); border: 1px solid var(--pill-border); border-radius: 999px;
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-  #ui { position: fixed; left: 16px; right: 16px; bottom: 16px; display: flex; gap: 8px;
+  #ui { position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); display: flex; gap: 8px;
     flex-wrap: wrap; justify-content: center; align-items: center; transition: opacity .25s; }
   #ui.hidden, #hint.hidden { opacity: 0; pointer-events: none; }
   button { font: inherit; font-size: 14px; color: var(--fg); cursor: pointer; padding: 10px 16px; }
@@ -36,8 +36,25 @@
   #themes button { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
   #themes button.sel { border-color: #fff; }
 
-  #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 10px 18px;
-    font-size: 14px; color: var(--muted); white-space: nowrap; transition: opacity .4s; }
+  #hint { position: fixed; top: calc(16px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    width: max-content; max-width: calc(100% - 32px); padding: 10px 18px; text-align: center;
+    font-size: 14px; line-height: 1.4; color: var(--muted); transition: opacity .4s; }
+  #save[hidden] { display: none; }
+  #save { background: #fff; color: #000; border-color: #fff; font-weight: 600; }
+  .touch-only { display: none; }
+  @media (hover: none) and (pointer: coarse) {
+    .touch-only { display: revert; }
+    .desktop-only { display: none; }
+  }
+  @media (max-width: 600px) {
+    #ui { gap: 6px; }
+    button { font-size: 13px; padding: 8px 12px; }
+    #themes { gap: 5px; padding: 5px 7px; }
+    #themes button { width: 24px; height: 24px; }
+    #hint { font-size: 13px; padding: 8px 14px; }
+    #count { font-size: 110px; }
+    .kbd { display: none; }
+  }
   #count { position: fixed; inset: 0; display: grid; place-items: center; font-size: 160px;
     font-weight: 800; pointer-events: none; text-shadow: 0 0 40px rgba(255,255,255,.5); }
 
@@ -56,18 +73,20 @@
 <div id="count"></div>
 
 <div id="ui">
+  <button id="save" class="pill" hidden>⬇ Guardar video</button>
   <button id="rec" class="pill" title="R"><span class="dot"></span><span id="recLabel">Grabar</span></button>
-  <button id="fmt" class="pill" title="V">Vertical 9:16</button>
-  <button id="style" class="pill" title="E">Estilo: Molecular</button>
+  <button id="fmt" class="pill" title="V">9:16</button>
+  <button id="style" class="pill" title="E">Molecular</button>
   <div id="themes" class="pill"></div>
-  <button id="hide" class="pill" title="H">Ocultar (H)</button>
+  <button id="hide" class="pill" title="H">Ocultar<span class="kbd"> (H)</span></button>
 </div>
 
 <div id="start">
   <div class="box">
     <h1>Palm Blast</h1>
     <p>Abrí la palma y aparece una bola de energía que sigue tu mano. Cerrá el puño y explota.<br>
-       Teclas: <b>R</b> grabar · <b>V</b> formato · <b>E</b> estilo · <b>1–4</b> color · <b>H</b> ocultar · <b>D</b> ver esqueleto</p>
+       <span class="desktop-only">Teclas: <b>R</b> grabar · <b>V</b> formato · <b>E</b> estilo · <b>1–4</b> color · <b>H</b> ocultar · <b>D</b> ver esqueleto</span>
+       <span class="touch-only">Apoyá el celu, alejate un poco y usá la otra mano. Si ocultás los botones, tocá la pantalla para volver a verlos.</span></p>
     <button id="go">Activar cámara</button>
     <div id="msg" class="err"></div>
   </div>
@@ -124,13 +143,14 @@ THEMES.forEach((t, i) => {
 setTheme(0);
 
 // ---------- Tamaño del lienzo ----------
+const IS_TOUCH = matchMedia("(hover: none) and (pointer: coarse)").matches;
 let vertical = false;
 let U = 1; // unidad de escala relativa a 720px
 function resize() {
   const W = innerWidth, H = innerHeight;
   let cw = W, ch = H;
   if (vertical) { ch = H; cw = H * 9 / 16; if (cw > W) { cw = W; ch = W * 16 / 9; } }
-  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const dpr = Math.min(devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2);
   let pw = Math.round(cw * dpr), ph = Math.round(ch * dpr);
   const cap = 1920 / Math.max(pw, ph);
   if (cap < 1) { pw = Math.round(pw * cap); ph = Math.round(ph * cap); }
@@ -619,9 +639,16 @@ function pickMime() {
   const types = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
   return types.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
 }
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+}
 async function toggleRec() {
   if (counting) return;
   if (recording) { rec.stop(); return; }
+  $("save").hidden = true;
   counting = true;
   for (const n of [3, 2, 1]) { $("count").textContent = n; await new Promise((r) => setTimeout(r, 800)); }
   $("count").textContent = ""; counting = false;
@@ -635,10 +662,18 @@ async function toggleRec() {
     $("rec").classList.remove("on"); $("recLabel").textContent = "Grabar"; $("fmt").disabled = false;
     const type = rec.mimeType || "video/webm";
     const blob = new Blob(chunks, { type });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `poder-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${type.includes("mp4") ? "mp4" : "webm"}`;
-    a.click();
+    const name = `palm-blast-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${type.includes("mp4") ? "mp4" : "webm"}`;
+    const file = new File([blob], name, { type });
+    // En el celu: botón para compartir/guardar (compartir necesita un toque del usuario)
+    if (IS_TOUCH && navigator.canShare?.({ files: [file] })) {
+      $("save").hidden = false;
+      $("save").onclick = async () => {
+        try { await navigator.share({ files: [file] }); $("save").hidden = true; }
+        catch (err) { if (err.name !== "AbortError") download(blob, name); }
+      };
+    } else {
+      download(blob, name);
+    }
   };
   rec.start(250);
   recording = true; recStart = performance.now();
@@ -655,16 +690,17 @@ $("rec").onclick = toggleRec;
 $("fmt").onclick = () => {
   if (recording) return;
   vertical = !vertical; resize();
-  $("fmt").textContent = vertical ? "Horizontal" : "Vertical 9:16";
+  $("fmt").textContent = vertical ? "Pantalla completa" : "9:16";
 };
 const toggleStyle = () => {
   style = style === "molecular" ? "clasico" : "molecular";
-  $("style").textContent = style === "molecular" ? "Estilo: Molecular" : "Estilo: Clásico";
+  $("style").textContent = style === "molecular" ? "Molecular" : "Clásico";
   for (const p of Object.values(powers)) if (p.charge > 0) scatterCloud(p);
 };
 $("style").onclick = toggleStyle;
 const toggleUI = () => { $("ui").classList.toggle("hidden"); $("hint").classList.add("hidden"); };
 $("hide").onclick = toggleUI;
+$("stage").addEventListener("click", () => { if ($("ui").classList.contains("hidden")) toggleUI(); });
 addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (k === "r") toggleRec();
