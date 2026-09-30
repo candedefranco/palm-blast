@@ -39,7 +39,10 @@
   #hint { position: fixed; top: calc(16px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
     width: max-content; max-width: calc(100% - 32px); padding: 10px 18px; text-align: center;
     font-size: 14px; line-height: 1.4; color: var(--muted); transition: opacity .4s; }
-  #save[hidden] { display: none; }
+  #save[hidden], #err[hidden] { display: none; }
+  #err { position: fixed; left: 50%; top: calc(70px + env(safe-area-inset-top)); transform: translateX(-50%);
+    width: max-content; max-width: calc(100% - 32px); padding: 10px 16px; font-size: 13px; line-height: 1.4;
+    text-align: center; background: rgba(120, 20, 30, .85); border-color: rgba(255, 120, 130, .5); z-index: 10; }
   #save { background: #fff; color: #000; border-color: #fff; font-weight: 600; }
   .touch-only { display: none; }
   @media (hover: none) and (pointer: coarse) {
@@ -92,7 +95,9 @@
   </div>
 </div>
 
-<video id="v" playsinline muted style="display:none"></video>
+<video id="v" playsinline muted autoplay
+  style="position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+<div id="err" class="pill" hidden></div>
 
 <script type="module">
 import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
@@ -611,9 +616,10 @@ let landmarker, lastVideoTime = -1, result = null, last = performance.now();
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   const t = now / 1000;
-  if (!SIM && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+  if (!SIM && landmarker && !switching && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
-    result = landmarker.detectForVideo(video, now);
+    try { result = landmarker.detectForVideo(video, now); }
+    catch (err) { result = null; fallbackToCPU(err); }
   }
   const r = coverRect();
   const hands = [];
@@ -711,38 +717,79 @@ addEventListener("keydown", (e) => {
   else if (k >= "1" && k <= "4") setTheme(+k - 1);
 });
 
+// ---------- Errores visibles (para poder diagnosticar en el celu) ----------
+function showError(msg) {
+  $("err").textContent = msg;
+  $("err").hidden = false;
+}
+addEventListener("error", (e) => showError("Error: " + (e.message || e.error)));
+addEventListener("unhandledrejection", (e) => showError("Error: " + (e.reason?.message || e.reason)));
+
+// Los navegadores internos de Instagram, TikTok, Facebook, etc. no dejan usar la cámara
+const IN_APP = /Instagram|FBAN|FBAV|FB_IAB|FBIOS|Line\/|TikTok|musical_ly|BytedanceWebview|Snapchat|Twitter/i.test(navigator.userAgent);
+const NO_CAMERA_API = !navigator.mediaDevices?.getUserMedia;
+if (IN_APP || NO_CAMERA_API) {
+  $("msg").textContent = "Este navegador no deja usar la cámara (pasa cuando abrís el link desde Instagram, TikTok, etc.). " +
+    "Tocá el menú ··· y elegí \"Abrir en el navegador\" (Chrome o Safari).";
+}
+
+// ---------- Detector de manos ----------
+let visionFiles = null, delegate = "GPU";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+async function createLandmarker(d) {
+  visionFiles ??= await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  delegate = d;
+  return HandLandmarker.createFromOptions(visionFiles, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate: d },
+    runningMode: "VIDEO", numHands: 2,
+    minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+  });
+}
+// Si la GPU del celu falla al detectar, pasamos a CPU en vez de quedar trabados
+let switching = false;
+async function fallbackToCPU(err) {
+  if (switching) return;
+  if (delegate === "CPU") { showError("La detección de manos falló: " + (err?.message || err)); return; }
+  switching = true;
+  try { landmarker = await createLandmarker("CPU"); }
+  catch (e) { showError("La detección de manos falló: " + (e?.message || e)); }
+  switching = false;
+}
+
 // ---------- Arranque ----------
 $("go").onclick = async () => {
   $("go").disabled = true; $("msg").textContent = "";
   try {
     $("go").textContent = "Pidiendo cámara…";
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }, audio: false,
-    });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }, audio: false,
+      });
+    } catch (err) {
+      if (err.name !== "OverconstrainedError") throw err;
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
     video.srcObject = stream;
     await video.play();
 
     $("go").textContent = "Cargando detector de manos…";
-    const files = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-    const opts = (delegate) => ({
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-        delegate,
-      },
-      runningMode: "VIDEO", numHands: 2,
-      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
-    });
-    try { landmarker = await HandLandmarker.createFromOptions(files, opts("GPU")); }
-    catch { landmarker = await HandLandmarker.createFromOptions(files, opts("CPU")); }
+    try { landmarker = await createLandmarker("GPU"); }
+    catch { landmarker = await createLandmarker("CPU"); }
 
     $("start").remove();
     resize();
     requestAnimationFrame(loop);
+    setTimeout(() => {
+      if (video.readyState < 2) showError("La cámara no está mandando imagen. Cerrá otras apps que la usen y recargá la página.");
+    }, 5000);
   } catch (err) {
     console.error(err);
     $("go").disabled = false; $("go").textContent = "Reintentar";
     $("msg").textContent = err.name === "NotAllowedError"
-      ? "No hay permiso para usar la cámara. Habilitalo en el navegador y reintentá."
+      ? "No hay permiso para usar la cámara. Habilitalo en los ajustes del navegador y reintentá."
+      : err.name === "NotFoundError" ? "No se encontró ninguna cámara."
+      : NO_CAMERA_API ? "Este navegador no deja usar la cámara. Abrí el link en Chrome o Safari."
       : "No se pudo iniciar: " + (err.message || err);
   }
 };
