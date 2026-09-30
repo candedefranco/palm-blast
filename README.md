@@ -16,6 +16,15 @@ python3 -m http.server 8000
 
 Después abrí <http://localhost:8000> en Chrome y tocá **Activar cámara**.
 
+Para probar los efectos sin cámara, abrí <http://localhost:8000/?sim>: una mano simulada se abre y se cierra sola.
+
+## Estilos
+
+| Estilo | Cómo se ve |
+|---|---|
+| **Molecular** (por defecto) | Una nube 3D de ~500 partículas orbitando un núcleo, con enlaces entre los átomos cercanos, profundidad y estelas de movimiento. Al explotar, esas mismas partículas salen despedidas con física |
+| **Clásico** | Bola de energía brillante con rayos, onda expansiva y flash |
+
 ## Gestos
 
 | Gesto | Efecto |
@@ -30,6 +39,7 @@ Después abrí <http://localhost:8000> en Chrome y tocá **Activar cámara**.
 |---|---|
 | `R` | Grabar / detener (cuenta regresiva de 3 s). Descarga un `.mp4` con los efectos |
 | `V` | Cambiar entre horizontal y vertical 9:16 (para reels) |
+| `E` | Cambiar de estilo: molecular / clásico |
 | `1`–`4` | Color: azul, fuego, verde, violeta |
 | `H` | Ocultar controles |
 | `D` | Mostrar el esqueleto de la mano (para depurar) |
